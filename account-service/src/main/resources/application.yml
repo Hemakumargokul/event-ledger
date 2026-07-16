@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: account-service
+  jpa:
+    open-in-view: false
+
+server:
+  port: 8081
+
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: account-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  tracing:
+    sampling:
+      # Default 0.1 would hide trace IDs from 90% of requests
+      probability: 1.0

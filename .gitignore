@@ -1,0 +1,14 @@
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
+
+# Working documents, not part of the submission
+Assignment.md
+SPEC.md
+PLAN.md
