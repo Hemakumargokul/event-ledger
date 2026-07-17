@@ -38,6 +38,15 @@ resilience4j:
       accountService:
         max-concurrent-calls: 10
         max-wait-duration: 0
+  # Inbound API rate limit (bonus): one global fixed window shared by all
+  # clients, fail-fast (no queueing). Excess requests get 429 before any
+  # duplicate check or downstream call. /health and /actuator stay unlimited.
+  ratelimiter:
+    instances:
+      gatewayApi:
+        limit-for-period: 50
+        limit-refresh-period: 1s
+        timeout-duration: 0
   circuitbreaker:
     instances:
       accountService:

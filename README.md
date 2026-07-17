@@ -32,7 +32,7 @@ tolerates out-of-order events, and degrades gracefully when the Account Service 
 
 | Service | Endpoint | Purpose |
 |---|---|---|
-| Gateway | `POST /events` | Submit an event: `201` new, `200` duplicate replay |
+| Gateway | `POST /events` | Submit an event: `201` new, `200` duplicate replay, `429` rate limited |
 | Gateway | `GET /events/{eventId}` | Fetch a stored event |
 | Gateway | `GET /events?account={id}` | Events for an account, chronological by `eventTimestamp` |
 | Gateway | `GET /accounts/{id}/balance` | Balance, proxied from the Account Service |
@@ -142,6 +142,15 @@ The Gateway→Account call is wrapped in four layered policies (Resilience4j):
 
 Only connection failures, timeouts, and downstream `5xx` trip these policies; a `4xx`
 means a Gateway bug and is neither retried nor counted by the breaker.
+
+The Gateway's public API is also **rate limited** (bonus): one global fixed window of
+50 requests/s shared by all clients across all `/events*` and balance endpoints,
+fail-fast with no queueing. Excess requests get `429 Too Many Requests` — with
+`Retry-After` and `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`
+headers so clients can back off instead of blind-retrying — before any duplicate check
+or downstream call, so a rejected submit persists nothing and is safe to retry.
+`/health` and `/actuator/*` stay unlimited so probes and scrapes keep working under
+load.
 
 When the Account Service is down: `POST /events` → `503` (nothing persisted, safe to
 retry the same `eventId`); all `GET /events*` reads work normally from local data;

@@ -6,6 +6,8 @@ import com.eventledger.gateway.dto.ErrorResponse;
 import com.eventledger.gateway.dto.EventRequest;
 import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import org.springframework.beans.factory.ObjectProvider;
@@ -24,10 +26,14 @@ import java.util.List;
 public class ApiExceptionHandler {
 
     private final ObjectProvider<Tracer> tracerProvider;
+    private final ObjectProvider<RateLimiterRegistry> rateLimiterRegistryProvider;
     private final LedgerMetrics metrics;
 
-    public ApiExceptionHandler(ObjectProvider<Tracer> tracerProvider, LedgerMetrics metrics) {
+    public ApiExceptionHandler(ObjectProvider<Tracer> tracerProvider,
+                               ObjectProvider<RateLimiterRegistry> rateLimiterRegistryProvider,
+                               LedgerMetrics metrics) {
         this.tracerProvider = tracerProvider;
+        this.rateLimiterRegistryProvider = rateLimiterRegistryProvider;
         this.metrics = metrics;
     }
 
@@ -80,6 +86,36 @@ public class ApiExceptionHandler {
     @ExceptionHandler(BulkheadFullException.class)
     public ResponseEntity<ErrorResponse> handleBulkheadFull(BulkheadFullException ex) {
         return build(HttpStatus.SERVICE_UNAVAILABLE, "Account Service is overloaded", null);
+    }
+
+    /**
+     * Inbound rate limit exceeded: 429 with rate-limit headers so clients can
+     * back off instead of blind-retrying. Retry-After / X-RateLimit-Reset are
+     * one refresh window — an upper bound, since RequestNotPermitted itself
+     * carries no timing and the window may refresh sooner.
+     */
+    @ExceptionHandler(RequestNotPermitted.class)
+    public ResponseEntity<ErrorResponse> handleRateLimited(RequestNotPermitted ex) {
+        ErrorResponse body = new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(),
+                HttpStatus.TOO_MANY_REQUESTS.getReasonPhrase(),
+                "Too many requests, slow down", currentTraceId(), Instant.now(), null);
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS);
+
+        RateLimiterRegistry registry = rateLimiterRegistryProvider.getIfAvailable();
+        if (registry != null) {
+            var limiter = registry.rateLimiter(ex.getCausingRateLimiterName());
+            long resetSeconds = Math.max(1,
+                    limiter.getRateLimiterConfig().getLimitRefreshPeriod().toSeconds());
+            response.header("Retry-After", String.valueOf(resetSeconds))
+                    .header("X-RateLimit-Limit",
+                            String.valueOf(limiter.getRateLimiterConfig().getLimitForPeriod()))
+                    .header("X-RateLimit-Remaining",
+                            String.valueOf(Math.max(0, limiter.getMetrics().getAvailablePermissions())))
+                    .header("X-RateLimit-Reset", String.valueOf(resetSeconds));
+        } else {
+            response.header("Retry-After", "1");
+        }
+        return response.body(body);
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String message,

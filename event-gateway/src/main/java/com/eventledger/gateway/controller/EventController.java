@@ -11,6 +11,7 @@ import com.eventledger.gateway.exception.EventNotFoundException;
 import com.eventledger.gateway.service.EventService;
 import com.eventledger.gateway.service.SubmissionResult;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,8 +25,16 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 
+/**
+ * All public API endpoints share one inbound rate limit (429 when exceeded,
+ * mapped by ApiExceptionHandler). Health and actuator endpoints live outside
+ * this controller and stay unlimited so probes keep working under load.
+ */
 @RestController
+@RateLimiter(name = EventController.GATEWAY_API)
 public class EventController {
+
+    static final String GATEWAY_API = "gatewayApi";
 
     private final EventService eventService;
     private final AccountServiceClient accountServiceClient;
