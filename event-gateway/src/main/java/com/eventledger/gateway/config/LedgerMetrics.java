@@ -16,7 +16,7 @@ public class LedgerMetrics {
         this.meterRegistry = meterRegistry;
     }
 
-    /** outcome: created | duplicate | rejected | unavailable */
+    /** outcome: created | duplicate | queued | rejected | unavailable */
     public void eventSubmitted(String type, String outcome) {
         meterRegistry.counter("ledger.events.submitted", "type", type, "outcome", outcome)
                 .increment();

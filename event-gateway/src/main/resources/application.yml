@@ -13,6 +13,12 @@ account-service:
   connect-timeout: 1s
   read-timeout: 2s
 
+# Async fallback (deviation from SPEC §8.3): events accepted while the
+# Account Service is down are queued locally and re-applied by the
+# QueueProcessor, which sweeps at this interval.
+event-queue:
+  sweep-interval: 5s
+
 # SPEC §8.2. Both policies react only to AccountServiceUnavailableException
 # (connection failure / timeout / downstream 5xx); 4xx is neither retried nor
 # recorded. Aspect order is fixed: Retry outside CircuitBreaker, so every

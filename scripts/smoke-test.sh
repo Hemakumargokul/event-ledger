@@ -4,8 +4,9 @@
 # Requires: curl, jq, docker compose.
 #
 # Covers: submit -> duplicate replay -> out-of-order listing -> balance,
-# then stops the Account Service and verifies graceful degradation
-# (503 on writes/balance, local reads and Gateway health still fine).
+# then stops the Account Service and verifies graceful degradation with the
+# async fallback (202 + local queue on writes, 503 on balance, local reads
+# and Gateway health still fine) and eventual convergence after restart.
 set -euo pipefail
 
 # Match GATEWAY_PORT / ACCOUNT_SERVICE_PORT overrides given to docker compose
@@ -82,13 +83,19 @@ echo "== Balance through the Gateway proxy =="
 balance_ok=$(curl -sS "$GATEWAY/accounts/acct-smoke/balance" | jq -r '.balance == 70')
 check "balance = 100 - 40 + 10" "$balance_ok" "true"
 
-echo "== Stopping account-service (graceful degradation) =="
+echo "== Stopping account-service (graceful degradation, async fallback) =="
 docker compose stop account-service > /dev/null
 
 r=$(submit evt-smoke-4 CREDIT 5.00 "2026-05-15T14:04:00Z")
-check "write with downstream down -> 503" "$(status_of "$r")" "503"
-check "503 body names the cause" \
-  "$(body_of "$r" | jq -r '.message')" "Account Service is unreachable"
+check "write with downstream down -> 202 (accepted into local queue)" "$(status_of "$r")" "202"
+check "202 body returns the accepted event" \
+  "$(body_of "$r" | jq -r '.eventId')" "evt-smoke-4"
+
+r=$(submit evt-smoke-4 CREDIT 5.00 "2026-05-15T14:04:00Z")
+check "duplicate of queued event -> 200" "$(status_of "$r")" "200"
+
+code=$(curl -sS -o /dev/null -w '%{http_code}' "$GATEWAY/events/evt-smoke-4")
+check "queued event immediately readable -> 200" "$code" "200"
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "$GATEWAY/events/evt-smoke-1")
 check "local event read still works -> 200" "$code" "200"
@@ -106,18 +113,22 @@ echo "== Restarting account-service =="
 docker compose start account-service > /dev/null
 wait_for "account-service" "$ACCOUNT/health"
 
-# The circuit breaker stays open for up to 10s before probing; keep retrying
-# the same event until it half-opens and the write goes through.
-recovered=""
-for _ in $(seq 1 15); do
-  r=$(submit evt-smoke-4 CREDIT 5.00 "2026-05-15T14:04:00Z")
-  if [[ "$(status_of "$r")" == "201" ]]; then
-    recovered="201"
+# The circuit breaker stays open for up to 10s; the queue sweeper (every 5s)
+# drains evt-smoke-4 once its probes succeed. Poll the balance until the
+# queued CREDIT 5.00 lands downstream: 100 - 40 + 10 + 5 = 75.
+converged=""
+for _ in $(seq 1 20); do
+  if [[ "$(curl -sS "$GATEWAY/accounts/acct-smoke/balance" 2>/dev/null \
+        | jq -r '.balance == 75' 2>/dev/null)" == "true" ]]; then
+    converged="true"
     break
   fi
   sleep 2
 done
-check "same eventId retried after recovery -> 201 (circuit closed again)" "$recovered" "201"
+check "queued event applied after recovery (balance converges to 75)" "$converged" "true"
+
+r=$(submit evt-smoke-4 CREDIT 5.00 "2026-05-15T14:04:00Z")
+check "same eventId after recovery replays as duplicate -> 200" "$(status_of "$r")" "200"
 
 echo
 echo "Result: $PASS passed, $FAIL failed"

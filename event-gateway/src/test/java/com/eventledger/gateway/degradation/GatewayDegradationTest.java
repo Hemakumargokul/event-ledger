@@ -3,6 +3,7 @@ package com.eventledger.gateway.degradation;
 import com.eventledger.gateway.model.EventRecord;
 import com.eventledger.gateway.model.TransactionType;
 import com.eventledger.gateway.repository.EventRepository;
+import com.eventledger.gateway.repository.PendingEventRepository;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,14 +23,17 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * SPEC §8.3: graceful degradation with the Account Service completely down
- * (base URL points at a closed port). Writes fail with 503 and leave no
- * state; every read that only needs local data keeps working; the Gateway
- * reports itself healthy because its own dependencies are fine.
+ * Graceful degradation with the Account Service completely down (base URL
+ * points at a closed port). Writes are accepted with 202 and queued locally
+ * (async fallback — deliberate deviation from SPEC §8.3's 503); every read
+ * that only needs local data keeps working; the Gateway reports itself
+ * healthy because its own dependencies are fine.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "account-service.base-url=http://localhost:1",
-        "resilience4j.retry.instances.accountService.wait-duration=50ms"
+        "resilience4j.retry.instances.accountService.wait-duration=50ms",
+        // keep the background sweeper quiet: this test is about intake behavior
+        "event-queue.sweep-interval=1h"
 })
 @AutoConfigureTestRestTemplate
 class GatewayDegradationTest {
@@ -39,6 +43,9 @@ class GatewayDegradationTest {
 
     @Autowired
     private EventRepository eventRepository;
+
+    @Autowired
+    private PendingEventRepository pendingEventRepository;
 
     @Autowired
     private CircuitBreakerRegistry circuitBreakerRegistry;
@@ -55,7 +62,7 @@ class GatewayDegradationTest {
     }
 
     @Test
-    void postEventReturns503WithErrorContractAndPersistsNothing() {
+    void postEventReturns202PersistsTheEventAndQueuesItForRecovery() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         ResponseEntity<String> response = restTemplate.postForEntity("/events",
@@ -70,10 +77,10 @@ class GatewayDegradationTest {
                         }
                         """, headers), String.class);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(response.getBody()).contains("\"status\":503");
-        assertThat(response.getBody()).contains("Account Service is unreachable");
-        assertThat(eventRepository.findById("evt-down-1")).isEmpty();
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody()).contains("\"eventId\":\"evt-down-1\"");
+        assertThat(eventRepository.findById("evt-down-1")).isPresent();
+        assertThat(pendingEventRepository.findById("evt-down-1")).isPresent();
     }
 
     @Test

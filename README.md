@@ -32,7 +32,7 @@ tolerates out-of-order events, and degrades gracefully when the Account Service 
 
 | Service | Endpoint | Purpose |
 |---|---|---|
-| Gateway | `POST /events` | Submit an event: `201` new, `200` duplicate replay, `429` rate limited |
+| Gateway | `POST /events` | Submit an event: `201` new, `200` duplicate replay, `202` accepted-and-queued while the Account Service is down, `429` rate limited |
 | Gateway | `GET /events/{eventId}` | Fetch a stored event |
 | Gateway | `GET /events?account={id}` | Events for an account, chronological by `eventTimestamp` |
 | Gateway | `GET /accounts/{id}/balance` | Balance, proxied from the Account Service |
@@ -90,8 +90,9 @@ With the stack up:
 
 It exercises submit → duplicate replay → out-of-order listing → balance, then stops the
 Account Service (`docker compose stop account-service`) and verifies graceful
-degradation: writes return `503`, local reads and Gateway health keep working, and the
-same event retries successfully after recovery.
+degradation: writes are accepted with `202` and queued locally, local reads and Gateway
+health keep working, and after a restart the queued event is applied automatically (the
+balance converges and a resend replays as a `200` duplicate).
 
 ### Manual run (no Docker)
 
@@ -103,7 +104,7 @@ cd event-gateway  && mvn spring-boot:run      # terminal 2
 ## Tests
 
 ```bash
-mvn test        # from the repo root — runs both modules (76 tests)
+mvn test        # from the repo root — runs both modules (87 tests)
 ```
 
 The suite is a pyramid: fast unit/slice tests for domain logic and API contracts
@@ -120,7 +121,8 @@ integration test that boots both real contexts on random ports.
 | Validation | `EventControllerTest` / `AccountControllerTest` (400 with per-field details; nothing reaches the service) |
 | Resiliency | `GatewayResilienceTest` (circuit opens on repeated 5xx and fails fast, half-open recovery, exactly-3-attempts retry, 4xx neither retried nor recorded, saturated bulkhead sheds without a downstream call) |
 | Trace propagation | `GatewayTracingTest` (downstream `traceparent` carries the caller's trace ID), `EndToEndIntegrationTest` (both services log one shared trace ID) |
-| Graceful degradation | `GatewayDegradationTest` (503 writes with nothing persisted, local reads fine, health UP) plus the smoke test against real containers |
+| Graceful degradation | `GatewayDegradationTest` (202 writes queued locally, local reads fine, health UP) plus the smoke test against real containers |
+| Async fallback queue | `GatewayAsyncFallbackTest` (202 + queue while down, duplicate of a queued event replays, queued events visible in reads, sweep after recovery applies downstream and clears the queue), `QueueProcessorTest` (oldest-first drain, stop on unavailability, poison-row safety) |
 | Service contract (Pact) | `AccountServicePactTest` (consumer: the real client generates `pacts/event-gateway-account-service.json`), `GatewayContractVerificationTest` (provider: replays every interaction against the real service with seeded state) |
 
 ## Resiliency design
@@ -129,8 +131,9 @@ The Gateway→Account call is wrapped in four layered policies (Resilience4j):
 
 - **Circuit breaker** (the primary pattern): count-based 10-call window, opens at 50%
   failures, 10s open-state wait, 3 half-open probes. When the Account Service is
-  repeatedly failing, hammering it helps nobody — the breaker fails fast (503 in
-  milliseconds instead of stacked timeouts) and gives it room to recover.
+  repeatedly failing, hammering it helps nobody — the breaker fails fast in
+  milliseconds instead of stacked timeouts (writes drop straight into the local
+  queue, the balance proxy returns 503) and gives it room to recover.
 - **Timeouts** bound each attempt (connect 1s, read 2s): a hung response is as bad as
   no response for a synchronous API.
 - **Retry with exponential backoff + jitter** (3 attempts, 200ms initial, ×2, 50%
@@ -154,9 +157,18 @@ or downstream call, so a rejected submit persists nothing and is safe to retry.
 `/health` and `/actuator/*` stay unlimited so probes and scrapes keep working under
 load.
 
-When the Account Service is down: `POST /events` → `503` (nothing persisted, safe to
-retry the same `eventId`); all `GET /events*` reads work normally from local data;
-balance proxy → `503` with an explicit message; Gateway health stays `UP`.
+When the Account Service is down (**async fallback**, a deliberate deviation from
+SPEC §8.3's reject-with-503): `POST /events` → `202 Accepted` — the event is stored
+locally together with a queue marker in one transaction, and a background
+`QueueProcessor` sweeps the queue every 5s (configurable via
+`event-queue.sweep-interval`), re-applying events oldest-first through the same
+resilient client once the service recovers; its attempts double as the circuit
+breaker's half-open probes. Duplicates of queued events replay with `200`, and queued
+events appear in all reads like any stored event. All `GET /events*` reads work
+normally from local data; the balance proxy — which cannot be answered locally —
+returns `503` with an explicit message; Gateway health stays `UP`. Only genuine
+unavailability queues; a `4xx`, or shedding by the bulkhead / rate limiter, still
+rejects the write with nothing persisted.
 
 ## Observability
 
@@ -181,6 +193,14 @@ balance proxy → `503` with an explicit message; Gateway health stays `UP`.
   sort by `eventTimestamp`. A balance read between an out-of-order debit and its credit
   can show an interim negative value — accepted, since rejecting early-arriving events
   would lose data.
+- **Async fallback is eventually consistent**: a `202` means "accepted and will be
+  applied", so between acceptance and the queue sweep a balance read does not yet
+  include the queued event. That window is bounded by the outage plus one sweep
+  interval, and reads of the event itself are immediate. With in-memory H2 the queue
+  dies with the process — a Gateway restart during an outage loses queued events (the
+  event store is lost with them, so no dangling state). A durable database would fix
+  both. This deviates from SPEC §8.3, which specified rejecting writes with `503`
+  during downstream outages; SPEC.md should be amended to match.
 - **Gateway crash window**: if the Gateway dies between the downstream commit and its
   local insert, a client retry heals it (downstream replay + local insert). A durable
   outbox was considered and deferred as out of scope.

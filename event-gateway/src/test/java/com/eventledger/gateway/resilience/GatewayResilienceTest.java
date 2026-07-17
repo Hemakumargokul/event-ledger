@@ -38,6 +38,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * through half-open probes, transient failures are retried (never 4xx), and
  * the custom metrics of SPEC §9.3 are recorded.
  *
+ * Since the async fallback, exhausted unavailability no longer surfaces as
+ * 503 on writes: the event is queued locally and the API answers 202. The
+ * circuit-breaker/retry mechanics asserted here are unchanged underneath.
+ *
  * Test-only overrides shrink SPEC §8.2 timings (10s open-state wait, 2s read
  * timeout, 200ms backoff) so the suite stays fast; counts and thresholds are
  * the real values.
@@ -46,6 +50,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "resilience4j.circuitbreaker.instances.accountService.wait-duration-in-open-state=500ms",
         "resilience4j.retry.instances.accountService.wait-duration=50ms",
         "account-service.read-timeout=500ms",
+        // keep the async-fallback sweeper quiet so it cannot add downstream
+        // requests to the counts asserted here
+        "event-queue.sweep-interval=1h",
         // Pact (contract tests) puts Apache HttpClient on the test classpath;
         // without this pin TestRestTemplate silently switches to it, which
         // re-sends requests and breaks the attempt-count/fail-fast assertions.
@@ -121,10 +128,11 @@ class GatewayResilienceTest {
         WIREMOCK.stubFor(post(urlEqualTo(transactionsPath("acct-cb")))
                 .willReturn(aResponse().withStatus(503)));
 
-        // 4 submissions x up to 3 attempts each fills the 10-call window with failures
+        // 4 submissions x up to 3 attempts each fills the 10-call window with
+        // failures; each event is accepted into the fallback queue (202)
         for (int i = 1; i <= 4; i++) {
             ResponseEntity<String> response = postEvent("evt-cb-" + i, "acct-cb");
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         }
         assertThat(circuitBreaker.getState()).isEqualTo(CircuitBreaker.State.OPEN);
 
@@ -135,9 +143,8 @@ class GatewayResilienceTest {
         ResponseEntity<String> failFast = postEvent("evt-cb-fast", "acct-cb");
         Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
 
-        assertThat(failFast.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(failFast.getBody()).contains("Account Service is unreachable");
-        // fails fast: no downstream attempt, so well under one read timeout
+        // fails fast into the queue: no downstream attempt, no retry wait
+        assertThat(failFast.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(elapsed).isLessThan(Duration.ofMillis(450));
         assertThat(WIREMOCK.countRequestsMatching(
                 postRequestedFor(urlEqualTo(transactionsPath("acct-cb"))).build()).getCount())
@@ -186,14 +193,14 @@ class GatewayResilienceTest {
     }
 
     @Test
-    void slowDownstreamTimesOutOnEveryAttemptAndReturns503() {
+    void slowDownstreamTimesOutOnEveryAttemptAndQueuesTheEvent() {
         String path = transactionsPath("acct-slow");
         WIREMOCK.stubFor(post(urlEqualTo(path))
                 .willReturn(aResponse().withStatus(201).withFixedDelay(1500)));
 
         ResponseEntity<String> response = postEvent("evt-slow-1", "acct-slow");
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         WIREMOCK.verify(exactly(3), postRequestedFor(urlEqualTo(path)));
     }
 
@@ -210,14 +217,15 @@ class GatewayResilienceTest {
     }
 
     @Test
-    void exhaustedRetriesPersistNothingAndTheSameEventSucceedsAfterRecovery() {
+    void exhaustedRetriesQueueTheEventWhichReplaysAsDuplicateAfterRecovery() {
         String path = transactionsPath("acct-heal");
         WIREMOCK.stubFor(post(urlEqualTo(path)).willReturn(aResponse().withStatus(503)));
 
+        // async fallback: accepted into the queue and immediately readable
         assertThat(postEvent("evt-heal-1", "acct-heal").getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .isEqualTo(HttpStatus.ACCEPTED);
         assertThat(restTemplate.getForEntity("/events/evt-heal-1", String.class).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+                .isEqualTo(HttpStatus.OK);
 
         WIREMOCK.resetAll();
         WIREMOCK.stubFor(post(urlEqualTo(path))
@@ -225,10 +233,11 @@ class GatewayResilienceTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"replayed\":false}")));
 
+        // re-sending the same event after recovery is a duplicate replay,
+        // not a new downstream apply
         assertThat(postEvent("evt-heal-1", "acct-heal").getStatusCode())
-                .isEqualTo(HttpStatus.CREATED);
-        assertThat(restTemplate.getForEntity("/events/evt-heal-1", String.class).getStatusCode())
                 .isEqualTo(HttpStatus.OK);
+        WIREMOCK.verify(exactly(0), postRequestedFor(urlEqualTo(path)));
     }
 
     @Test
@@ -285,12 +294,12 @@ class GatewayResilienceTest {
 
         WIREMOCK.resetAll();
         WIREMOCK.stubFor(post(urlEqualTo(path)).willReturn(aResponse().withStatus(503)));
-        postEvent("evt-metrics-2", "acct-metrics");                    // unavailable
+        postEvent("evt-metrics-2", "acct-metrics");                    // queued (fallback)
 
         assertThat(counterValue("created")).isGreaterThanOrEqualTo(1.0);
         assertThat(counterValue("duplicate")).isGreaterThanOrEqualTo(1.0);
         assertThat(counterValue("rejected")).isGreaterThanOrEqualTo(1.0);
-        assertThat(counterValue("unavailable")).isGreaterThanOrEqualTo(1.0);
+        assertThat(counterValue("queued")).isGreaterThanOrEqualTo(1.0);
 
         assertThat(meterRegistry.find("ledger.account.call").tag("outcome", "success").timer())
                 .isNotNull();

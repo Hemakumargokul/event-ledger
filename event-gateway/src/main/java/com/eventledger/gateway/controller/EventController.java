@@ -1,7 +1,6 @@
 package com.eventledger.gateway.controller;
 
 import com.eventledger.gateway.client.AccountServiceClient;
-import com.eventledger.gateway.client.AccountServiceUnavailableException;
 import com.eventledger.gateway.client.BalanceSnapshot;
 import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.dto.EventListResponse;
@@ -10,7 +9,7 @@ import com.eventledger.gateway.dto.EventResponse;
 import com.eventledger.gateway.exception.EventNotFoundException;
 import com.eventledger.gateway.service.EventService;
 import com.eventledger.gateway.service.SubmissionResult;
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -54,13 +53,15 @@ public class EventController {
         SubmissionResult result;
         try {
             result = eventService.submit(request.toSubmission());
-        } catch (AccountServiceUnavailableException | CallNotPermittedException e) {
+        } catch (BulkheadFullException e) {
+            // unavailability now queues inside EventService; only local
+            // back-pressure still rejects the write with 503
             metrics.eventSubmitted(request.type(), "unavailable");
             throw e;
         }
-        metrics.eventSubmitted(request.type(), result.duplicate() ? "duplicate" : "created");
-        HttpStatus status = result.duplicate() ? HttpStatus.OK : HttpStatus.CREATED;
-        return ResponseEntity.status(status).body(EventResponse.from(result.event(), objectMapper));
+        metrics.eventSubmitted(request.type(), metricOutcome(result.outcome()));
+        return ResponseEntity.status(httpStatus(result.outcome()))
+                .body(EventResponse.from(result.event(), objectMapper));
     }
 
     @GetMapping("/events/{eventId}")
@@ -76,6 +77,22 @@ public class EventController {
                 .map(event -> EventResponse.from(event, objectMapper))
                 .toList();
         return new EventListResponse(accountId, events);
+    }
+
+    private static String metricOutcome(SubmissionResult.Outcome outcome) {
+        return switch (outcome) {
+            case CREATED -> "created";
+            case DUPLICATE -> "duplicate";
+            case QUEUED -> "queued";
+        };
+    }
+
+    private static HttpStatus httpStatus(SubmissionResult.Outcome outcome) {
+        return switch (outcome) {
+            case CREATED -> HttpStatus.CREATED;
+            case DUPLICATE -> HttpStatus.OK;
+            case QUEUED -> HttpStatus.ACCEPTED;
+        };
     }
 
     /** Balance proxy: the Gateway holds no balances, so this is a passthrough. */

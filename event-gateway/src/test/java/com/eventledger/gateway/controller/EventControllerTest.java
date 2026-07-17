@@ -118,16 +118,16 @@ class EventControllerTest {
     }
 
     @Test
-    void accountServiceDownReturns503WithErrorContract() throws Exception {
-        when(eventService.submit(any()))
-                .thenThrow(new AccountServiceUnavailableException("Account Service is unreachable", null));
+    void queuedEventReturns202WithStoredEventAndQueuedMetric() throws Exception {
+        when(eventService.submit(any())).thenReturn(SubmissionResult.queued(storedEvent()));
 
         mockMvc.perform(post("/events").contentType(MediaType.APPLICATION_JSON).content(fullBody()))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.status").value(503))
-                .andExpect(jsonPath("$.error").value("Service Unavailable"))
-                .andExpect(jsonPath("$.message").value("Account Service is unreachable"))
-                .andExpect(jsonPath("$.traceId").value("test-trace-id"));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.eventId").value("evt-1"))
+                .andExpect(jsonPath("$.accountId").value("acct-1"))
+                .andExpect(jsonPath("$.receivedAt").exists());
+
+        verify(ledgerMetrics).eventSubmitted("CREDIT", "queued");
     }
 
     @Test
