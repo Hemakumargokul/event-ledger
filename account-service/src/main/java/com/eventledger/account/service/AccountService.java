@@ -65,6 +65,32 @@ public class AccountService {
         return transactionRepository.countByAccount_AccountId(accountId);
     }
 
+    public Account getAccount(String accountId) {
+        return accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+    }
+
+    public List<AccountTransaction> recentTransactions(String accountId) {
+        return transactionRepository.findTop10ByAccount_AccountIdOrderByEventTimestampDesc(accountId);
+    }
+
+    public long transactionCount(String accountId) {
+        return transactionRepository.countByAccount_AccountId(accountId);
+    }
+
+    public Account getAccount(String accountId) {
+        return accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+    }
+
+    public List<AccountTransaction> recentTransactions(String accountId) {
+        return transactionRepository.findTop10ByAccount_AccountIdOrderByEventTimestampDesc(accountId);
+    }
+
+    public long transactionCount(String accountId) {
+        return transactionRepository.countByAccount_AccountId(accountId);
+    }
+
     private Optional<ApplyResult> findReplay(String transactionId) {
         return transactionRepository.findById(transactionId).map(txn -> {
             Account account = accountRepository.findById(txn.getAccountId()).orElseThrow();

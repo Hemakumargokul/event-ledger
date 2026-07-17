@@ -9,6 +9,37 @@ server:
 
 account-service:
   base-url: ${ACCOUNT_SERVICE_URL:http://localhost:8081}
+  # SPEC §8.2: per-attempt bounds; the retry policy sits above these
+  connect-timeout: 1s
+  read-timeout: 2s
+
+# SPEC §8.2. Both policies react only to AccountServiceUnavailableException
+# (connection failure / timeout / downstream 5xx); 4xx is neither retried nor
+# recorded. Aspect order is fixed: Retry outside CircuitBreaker, so every
+# attempt counts toward the CB window.
+resilience4j:
+  retry:
+    instances:
+      accountService:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+        retry-exceptions:
+          - com.eventledger.gateway.client.AccountServiceUnavailableException
+  circuitbreaker:
+    instances:
+      accountService:
+        sliding-window-type: count_based
+        sliding-window-size: 10
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        record-exceptions:
+          - com.eventledger.gateway.client.AccountServiceUnavailableException
 
 logging:
   structured:

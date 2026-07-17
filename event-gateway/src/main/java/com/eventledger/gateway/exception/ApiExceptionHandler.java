@@ -1,7 +1,10 @@
 package com.eventledger.gateway.exception;
 
 import com.eventledger.gateway.client.AccountServiceUnavailableException;
+import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.dto.ErrorResponse;
+import com.eventledger.gateway.dto.EventRequest;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,13 +23,19 @@ import java.util.List;
 public class ApiExceptionHandler {
 
     private final ObjectProvider<Tracer> tracerProvider;
+    private final LedgerMetrics metrics;
 
-    public ApiExceptionHandler(ObjectProvider<Tracer> tracerProvider) {
+    public ApiExceptionHandler(ObjectProvider<Tracer> tracerProvider, LedgerMetrics metrics) {
         this.tracerProvider = tracerProvider;
+        this.metrics = metrics;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+        if (ex.getBindingResult().getTarget() instanceof EventRequest request
+                && request.type() != null) {
+            metrics.eventSubmitted(request.type(), "rejected");
+        }
         List<ErrorResponse.FieldError> details = ex.getBindingResult().getFieldErrors().stream()
                 .map(fe -> new ErrorResponse.FieldError(fe.getField(), fe.getDefaultMessage()))
                 .toList();
@@ -58,6 +67,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(AccountServiceUnavailableException.class)
     public ResponseEntity<ErrorResponse> handleUnavailable(AccountServiceUnavailableException ex) {
         return build(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), null);
+    }
+
+    /** Circuit open: fail fast with the same contract as an unreachable downstream. */
+    @ExceptionHandler(CallNotPermittedException.class)
+    public ResponseEntity<ErrorResponse> handleCircuitOpen(CallNotPermittedException ex) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "Account Service is unreachable", null);
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String message,

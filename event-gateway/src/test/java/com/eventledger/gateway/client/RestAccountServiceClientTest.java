@@ -1,9 +1,11 @@
 package com.eventledger.gateway.client;
 
+import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.exception.AccountNotFoundException;
 import com.eventledger.gateway.model.TransactionType;
 import com.eventledger.gateway.service.EventSubmission;
 import com.github.tomakehurst.wiremock.WireMockServer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,7 +54,13 @@ class RestAccountServiceClientTest {
     @BeforeEach
     void setUp() {
         wireMock.resetAll();
-        client = new RestAccountServiceClient(RestClient.builder(), wireMock.baseUrl());
+        client = clientFor(wireMock.baseUrl());
+    }
+
+    private static RestAccountServiceClient clientFor(String baseUrl) {
+        return new RestAccountServiceClient(
+                RestClient.builder().baseUrl(baseUrl).build(),
+                new LedgerMetrics(new SimpleMeterRegistry()));
     }
 
     private EventSubmission submission() {
@@ -92,8 +100,7 @@ class RestAccountServiceClientTest {
 
     @Test
     void connectionFailureTranslatesToUnavailable() {
-        RestAccountServiceClient unreachable =
-                new RestAccountServiceClient(RestClient.builder(), "http://localhost:1");
+        RestAccountServiceClient unreachable = clientFor("http://localhost:1");
 
         assertThatThrownBy(() -> unreachable.applyTransaction(submission()))
                 .isInstanceOf(AccountServiceUnavailableException.class);

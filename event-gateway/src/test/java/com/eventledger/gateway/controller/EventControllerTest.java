@@ -3,6 +3,7 @@ package com.eventledger.gateway.controller;
 import com.eventledger.gateway.client.AccountServiceClient;
 import com.eventledger.gateway.client.AccountServiceUnavailableException;
 import com.eventledger.gateway.client.BalanceSnapshot;
+import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.exception.AccountNotFoundException;
 import com.eventledger.gateway.model.EventRecord;
 import com.eventledger.gateway.model.TransactionType;
@@ -64,6 +65,9 @@ class EventControllerTest {
 
     @MockitoBean
     private AccountServiceClient accountServiceClient;
+
+    @MockitoBean
+    private LedgerMetrics ledgerMetrics;
 
     private EventRecord storedEvent() {
         return new EventRecord("evt-1", "acct-1", TransactionType.CREDIT,
