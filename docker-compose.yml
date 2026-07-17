@@ -1,0 +1,33 @@
+services:
+  # Host ports are overridable for machines where the defaults are taken
+  # (e.g. GATEWAY_PORT=18080 docker compose up); container ports are fixed.
+  account-service:
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
+    ports:
+      - "${ACCOUNT_SERVICE_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  event-gateway:
+    build:
+      context: .
+      dockerfile: event-gateway/Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+    # Startup nicety only: the Gateway tolerates the Account Service being
+    # down at any time (degradation demo: docker compose stop account-service)
+    depends_on:
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
