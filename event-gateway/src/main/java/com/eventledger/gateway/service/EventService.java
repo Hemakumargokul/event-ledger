@@ -3,6 +3,8 @@ package com.eventledger.gateway.service;
 import com.eventledger.gateway.client.AccountServiceClient;
 import com.eventledger.gateway.model.EventRecord;
 import com.eventledger.gateway.repository.EventRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +14,8 @@ import java.util.Optional;
 
 @Service
 public class EventService {
+
+    private static final Logger log = LoggerFactory.getLogger(EventService.class);
 
     private final EventRepository eventRepository;
     private final AccountServiceClient accountServiceClient;
@@ -31,6 +35,8 @@ public class EventService {
     public SubmissionResult submit(EventSubmission submission) {
         Optional<EventRecord> existing = eventRepository.findById(submission.eventId());
         if (existing.isPresent()) {
+            log.info("Duplicate event {} replayed for account {}",
+                    submission.eventId(), submission.accountId());
             return SubmissionResult.duplicate(existing.get());
         }
 
@@ -40,7 +46,10 @@ public class EventService {
                 submission.type(), submission.amount(), submission.currency(),
                 submission.eventTimestamp(), submission.metadataJson(), Instant.now());
         try {
-            return SubmissionResult.created(eventRepository.save(record));
+            SubmissionResult result = SubmissionResult.created(eventRepository.save(record));
+            log.info("Accepted event {} for account {}",
+                    submission.eventId(), submission.accountId());
+            return result;
         } catch (DataIntegrityViolationException e) {
             // Lost a race with a concurrent duplicate submission; the
             // downstream apply was idempotent, so return the winner's record.

@@ -55,7 +55,14 @@
       <artifactId>spring-boot-starter-aspectj</artifactId>
     </dependency>
 
-    <!-- Observability: OTel-based tracing + Prometheus metrics -->
+    <!-- Observability: OTel-based tracing + Prometheus metrics.
+         Boot 4 moved tracing auto-configuration out of the actuator starter
+         into this module; without it the bridge sits inert on the classpath
+         and traceparent silently never propagates. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId>
+    </dependency>
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-tracing-bridge-otel</artifactId>
@@ -91,6 +98,14 @@
       <groupId>org.wiremock</groupId>
       <artifactId>wiremock-standalone</artifactId>
       <version>${wiremock.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Two-service integration test boots the real Account Service context
+         (plain jar; its runnable jar carries the exec classifier) -->
+    <dependency>
+      <groupId>com.eventledger</groupId>
+      <artifactId>account-service</artifactId>
+      <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

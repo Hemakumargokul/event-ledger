@@ -37,7 +37,14 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- Observability: OTel-based tracing + Prometheus metrics -->
+    <!-- Observability: OTel-based tracing + Prometheus metrics.
+         Boot 4 moved tracing auto-configuration out of the actuator starter
+         into this module; without it the bridge sits inert on the classpath
+         and traceparent silently never propagates. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId>
+    </dependency>
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-tracing-bridge-otel</artifactId>
@@ -81,6 +88,12 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <!-- Keep the plain jar as the main artifact so the Gateway's
+               two-service integration test can depend on these classes;
+               the runnable fat jar gets the "exec" classifier instead. -->
+          <classifier>exec</classifier>
+        </configuration>
       </plugin>
     </plugins>
   </build>

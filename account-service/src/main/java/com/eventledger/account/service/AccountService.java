@@ -5,6 +5,8 @@ import com.eventledger.account.model.Account;
 import com.eventledger.account.model.AccountTransaction;
 import com.eventledger.account.repository.AccountRepository;
 import com.eventledger.account.repository.TransactionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -17,6 +19,8 @@ import java.util.Optional;
 
 @Service
 public class AccountService {
+
+    private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
@@ -44,38 +48,14 @@ public class AccountService {
             return replay.get();
         }
         try {
-            return transactionTemplate.execute(status -> applyNew(accountId, command));
+            ApplyResult result = transactionTemplate.execute(status -> applyNew(accountId, command));
+            log.info("Applied transaction {} to account {}", command.transactionId(), accountId);
+            return result;
         } catch (DataIntegrityViolationException | OptimisticLockingFailureException e) {
             // Lost a race with a concurrent duplicate: resolve to the replay
             // outcome. Anything else is a genuine failure and is rethrown.
             return findReplay(command.transactionId()).orElseThrow(() -> e);
         }
-    }
-
-    public Account getAccount(String accountId) {
-        return accountRepository.findById(accountId)
-                .orElseThrow(() -> new AccountNotFoundException(accountId));
-    }
-
-    public List<AccountTransaction> recentTransactions(String accountId) {
-        return transactionRepository.findTop10ByAccount_AccountIdOrderByEventTimestampDesc(accountId);
-    }
-
-    public long transactionCount(String accountId) {
-        return transactionRepository.countByAccount_AccountId(accountId);
-    }
-
-    public Account getAccount(String accountId) {
-        return accountRepository.findById(accountId)
-                .orElseThrow(() -> new AccountNotFoundException(accountId));
-    }
-
-    public List<AccountTransaction> recentTransactions(String accountId) {
-        return transactionRepository.findTop10ByAccount_AccountIdOrderByEventTimestampDesc(accountId);
-    }
-
-    public long transactionCount(String accountId) {
-        return transactionRepository.countByAccount_AccountId(accountId);
     }
 
     public Account getAccount(String accountId) {
