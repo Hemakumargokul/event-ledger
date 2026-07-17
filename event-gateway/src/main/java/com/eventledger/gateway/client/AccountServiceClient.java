@@ -12,4 +12,10 @@ public interface AccountServiceClient {
 
     /** Applies the event's transaction to its account, idempotently downstream. */
     void applyTransaction(EventSubmission submission);
+
+    /**
+     * Fetches the current balance. Throws the Gateway's
+     * {@code AccountNotFoundException} when the downstream reports 404.
+     */
+    BalanceSnapshot getBalance(String accountId);
 }
