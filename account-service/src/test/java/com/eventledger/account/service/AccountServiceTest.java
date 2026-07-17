@@ -119,6 +119,21 @@ class AccountServiceTest {
     }
 
     @Test
+    void recentTransactionsReturnsNewestTenByEventTimestamp() {
+        for (int i = 1; i <= 12; i++) {
+            accountService.apply("acct-1",
+                    credit("txn-" + i, new BigDecimal("1.00"), TS.plusSeconds(i * 60L)));
+        }
+
+        var recent = accountService.recentTransactions("acct-1");
+
+        assertThat(recent).hasSize(10);
+        assertThat(recent.getFirst().getTransactionId()).isEqualTo("txn-12");
+        assertThat(recent.getLast().getTransactionId()).isEqualTo("txn-3");
+        assertThat(accountService.transactionCount("acct-1")).isEqualTo(12);
+    }
+
+    @Test
     void concurrentDuplicateResolvesToReplayAndAppliesExactlyOnce() throws Exception {
         // Pre-existing account so both racers contend on the same rows
         accountService.apply("acct-1", credit("txn-seed", new BigDecimal("10.00"), TS));

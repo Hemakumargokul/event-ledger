@@ -1,5 +1,6 @@
 package com.eventledger.account.service;
 
+import com.eventledger.account.exception.AccountNotFoundException;
 import com.eventledger.account.model.Account;
 import com.eventledger.account.model.AccountTransaction;
 import com.eventledger.account.repository.AccountRepository;
@@ -11,6 +12,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -48,6 +50,19 @@ public class AccountService {
             // outcome. Anything else is a genuine failure and is rethrown.
             return findReplay(command.transactionId()).orElseThrow(() -> e);
         }
+    }
+
+    public Account getAccount(String accountId) {
+        return accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+    }
+
+    public List<AccountTransaction> recentTransactions(String accountId) {
+        return transactionRepository.findTop10ByAccount_AccountIdOrderByEventTimestampDesc(accountId);
+    }
+
+    public long transactionCount(String accountId) {
+        return transactionRepository.countByAccount_AccountId(accountId);
     }
 
     private Optional<ApplyResult> findReplay(String transactionId) {
