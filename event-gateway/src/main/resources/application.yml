@@ -29,6 +29,15 @@ resilience4j:
         randomized-wait-factor: 0.5
         retry-exceptions:
           - com.eventledger.gateway.client.AccountServiceUnavailableException
+  # Semaphore bulkhead (innermost decorator): caps servlet threads a hung
+  # downstream can pin to 10 x read-timeout. When full it sheds immediately
+  # (503 "overloaded"); BulkheadFullException is local back-pressure, so it is
+  # neither retried nor recorded by the circuit breaker.
+  bulkhead:
+    instances:
+      accountService:
+        max-concurrent-calls: 10
+        max-wait-duration: 0
   circuitbreaker:
     instances:
       accountService:

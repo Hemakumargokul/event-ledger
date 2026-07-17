@@ -7,6 +7,8 @@ services:
       dockerfile: account-service/Dockerfile
     ports:
       - "${ACCOUNT_SERVICE_PORT:-8081}:8081"
+    environment:
+      MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health > /dev/null"]
       interval: 5s
@@ -21,6 +23,7 @@ services:
       - "${GATEWAY_PORT:-8080}:8080"
     environment:
       ACCOUNT_SERVICE_URL: http://account-service:8081
+      MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
     # Startup nicety only: the Gateway tolerates the Account Service being
     # down at any time (degradation demo: docker compose stop account-service)
     depends_on:
@@ -31,3 +34,16 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Trace visualization (bonus): services -> OTLP -> collector -> Jaeger.
+  # If the collector is down the apps still run; span export just drops.
+  otel-collector:
+    image: otel/opentelemetry-collector:0.128.0
+    command: ["--config=/etc/otel-collector.yml"]
+    volumes:
+      - ./otel-collector.yml:/etc/otel-collector.yml:ro
+
+  jaeger:
+    image: jaegertracing/jaeger:2.7.0
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"

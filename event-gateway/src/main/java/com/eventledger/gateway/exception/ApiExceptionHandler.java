@@ -4,6 +4,7 @@ import com.eventledger.gateway.client.AccountServiceUnavailableException;
 import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.dto.ErrorResponse;
 import com.eventledger.gateway.dto.EventRequest;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
@@ -73,6 +74,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(CallNotPermittedException.class)
     public ResponseEntity<ErrorResponse> handleCircuitOpen(CallNotPermittedException ex) {
         return build(HttpStatus.SERVICE_UNAVAILABLE, "Account Service is unreachable", null);
+    }
+
+    /** Bulkhead full: local back-pressure, shed with 503; safe for the client to retry. */
+    @ExceptionHandler(BulkheadFullException.class)
+    public ResponseEntity<ErrorResponse> handleBulkheadFull(BulkheadFullException ex) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "Account Service is overloaded", null);
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String message,

@@ -54,11 +54,12 @@ tolerates out-of-order events, and degrades gracefully when the Account Service 
 docker compose up --build
 ```
 
-Gateway on `http://localhost:8080`, Account Service on `http://localhost:8081`.
+Gateway on `http://localhost:8080`, Account Service on `http://localhost:8081`,
+Jaeger trace UI on `http://localhost:16686`.
 If those host ports are taken on your machine, override them:
 
 ```bash
-GATEWAY_PORT=18080 ACCOUNT_SERVICE_PORT=18081 docker compose up --build
+GATEWAY_PORT=18080 ACCOUNT_SERVICE_PORT=18081 JAEGER_UI_PORT=26686 docker compose up --build
 ```
 
 Submit an event:
@@ -116,13 +117,13 @@ integration test that boots both real contexts on random ports.
 | Out-of-order tolerance | `EventRepositoryTest` (chronological listing), `AccountServiceTest` (same balance regardless of arrival order), `EndToEndIntegrationTest` |
 | Balance correctness | `AccountServiceTest` (`BigDecimal` math, negative balances allowed by design) |
 | Validation | `EventControllerTest` / `AccountControllerTest` (400 with per-field details; nothing reaches the service) |
-| Resiliency | `GatewayResilienceTest` (circuit opens on repeated 5xx and fails fast, half-open recovery, exactly-3-attempts retry, 4xx neither retried nor recorded) |
+| Resiliency | `GatewayResilienceTest` (circuit opens on repeated 5xx and fails fast, half-open recovery, exactly-3-attempts retry, 4xx neither retried nor recorded, saturated bulkhead sheds without a downstream call) |
 | Trace propagation | `GatewayTracingTest` (downstream `traceparent` carries the caller's trace ID), `EndToEndIntegrationTest` (both services log one shared trace ID) |
 | Graceful degradation | `GatewayDegradationTest` (503 writes with nothing persisted, local reads fine, health UP) plus the smoke test against real containers |
 
 ## Resiliency design
 
-The Gateway→Account call is wrapped in three layered policies (Resilience4j):
+The Gateway→Account call is wrapped in four layered policies (Resilience4j):
 
 - **Circuit breaker** (the primary pattern): count-based 10-call window, opens at 50%
   failures, 10s open-state wait, 3 half-open probes. When the Account Service is
@@ -134,6 +135,10 @@ The Gateway→Account call is wrapped in three layered policies (Resilience4j):
   jitter) heals transient blips without a thundering herd. Retrying is *safe* only
   because the Account Service is idempotent — a retry whose first attempt actually
   committed replays instead of double-applying.
+- **Bulkhead** (semaphore, max 10 concurrent calls, no wait): caps how many servlet
+  threads a hung Account Service can pin at once. When full, excess calls shed
+  immediately with `503` "Account Service is overloaded" — local back-pressure, so
+  it is neither retried nor counted by the circuit breaker.
 
 Only connection failures, timeouts, and downstream `5xx` trip these policies; a `4xx`
 means a Gateway bug and is neither retried nor counted by the breaker.
@@ -146,6 +151,12 @@ balance proxy → `503` with an explicit message; Gateway health stays `UP`.
 
 - **Distributed tracing**: one trace ID per client request, propagated over W3C
   `traceparent` and logged by both services (Micrometer Tracing, OTel bridge).
+- **Trace visualization**: under Docker Compose, both services export OTLP spans to an
+  **OpenTelemetry Collector**, which forwards them to **Jaeger** — open
+  `http://localhost:16686`, pick `event-gateway`, and a single `POST /events` shows as
+  one trace with spans across both services. Export activates only when the
+  `MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT` env var is set (compose sets
+  it), so manual runs and tests are unaffected.
 - **Structured logs**: ECS JSON on stdout with service name, trace and span IDs.
 - **Metrics**: `/actuator/prometheus` on both services, including
   `ledger.events.submitted` (by type/outcome), `ledger.account.call` latency

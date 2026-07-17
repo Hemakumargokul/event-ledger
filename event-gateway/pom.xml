@@ -71,6 +71,13 @@
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-registry-prometheus</artifactId>
     </dependency>
+    <!-- OTLP span export (bonus: Collector + Jaeger). Boot's OtlpTracingAutoConfiguration
+         only activates when management.opentelemetry.tracing.export.otlp.endpoint is set
+         (done via env var in docker-compose), so local runs and tests are unaffected. -->
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
 
     <dependency>
       <groupId>org.springframework.boot</groupId>

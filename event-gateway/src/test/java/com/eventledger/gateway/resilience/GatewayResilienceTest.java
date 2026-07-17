@@ -1,6 +1,8 @@
 package com.eventledger.gateway.resilience;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -70,6 +72,9 @@ class GatewayResilienceTest {
 
     @Autowired
     private CircuitBreakerRegistry circuitBreakerRegistry;
+
+    @Autowired
+    private BulkheadRegistry bulkheadRegistry;
 
     @Autowired
     private MeterRegistry meterRegistry;
@@ -220,6 +225,44 @@ class GatewayResilienceTest {
                 .isEqualTo(HttpStatus.CREATED);
         assertThat(restTemplate.getForEntity("/events/evt-heal-1", String.class).getStatusCode())
                 .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void saturatedBulkheadShedsLoadImmediatelyWithoutCallingDownstream() {
+        String path = transactionsPath("acct-bh");
+        WIREMOCK.stubFor(post(urlEqualTo(path))
+                .willReturn(aResponse().withStatus(201)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"replayed\":false}")));
+
+        Bulkhead bulkhead = bulkheadRegistry.bulkhead("accountService");
+        int acquired = 0;
+        while (bulkhead.tryAcquirePermission()) {
+            acquired++;
+        }
+        try {
+            // the configured concurrency limit (SPEC-style initial value)
+            assertThat(acquired).isEqualTo(10);
+
+            long start = System.nanoTime();
+            ResponseEntity<String> shed = postEvent("evt-bh-1", "acct-bh");
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+
+            assertThat(shed.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            assertThat(shed.getBody()).contains("Account Service is overloaded");
+            // max-wait-duration 0: shed immediately, no retry, no downstream attempt
+            assertThat(elapsed).isLessThan(Duration.ofMillis(450));
+            WIREMOCK.verify(exactly(0), postRequestedFor(urlEqualTo(path)));
+            // a full bulkhead is local back-pressure, not downstream failure
+            assertThat(circuitBreaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        } finally {
+            for (int i = 0; i < acquired; i++) {
+                bulkhead.releasePermission();
+            }
+        }
+
+        // permits released: the same event now goes through normally
+        assertThat(postEvent("evt-bh-1", "acct-bh").getStatusCode()).isEqualTo(HttpStatus.CREATED);
     }
 
     @Test

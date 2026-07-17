@@ -3,6 +3,7 @@ package com.eventledger.gateway.client;
 import com.eventledger.gateway.config.LedgerMetrics;
 import com.eventledger.gateway.exception.AccountNotFoundException;
 import com.eventledger.gateway.service.EventSubmission;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.http.HttpStatus;
@@ -20,8 +21,9 @@ import java.time.Instant;
  * auto-configured builder (see AccountClientConfig) so W3C traceparent
  * propagates, with SPEC §8.2 per-attempt timeouts.
  *
- * Resiliency (SPEC §8.1, aspect order fixed as Retry outside CircuitBreaker):
- * both policies react only to {@link AccountServiceUnavailableException},
+ * Resiliency (SPEC §8.1, aspect order fixed as Retry outside CircuitBreaker
+ * outside Bulkhead): retry and breaker react only to
+ * {@link AccountServiceUnavailableException},
  * which this class throws for connection failures, timeouts, and downstream
  * 5xx. A balance 404 becomes the Gateway's {@link AccountNotFoundException};
  * any other 4xx propagates untranslated (a Gateway bug, not unavailability)
@@ -51,6 +53,7 @@ public class RestAccountServiceClient implements AccountServiceClient {
     @Override
     @Retry(name = ACCOUNT_SERVICE)
     @CircuitBreaker(name = ACCOUNT_SERVICE)
+    @Bulkhead(name = ACCOUNT_SERVICE)
     public void applyTransaction(EventSubmission submission) {
         metrics.timeAccountCall(() -> {
             try {
@@ -77,6 +80,7 @@ public class RestAccountServiceClient implements AccountServiceClient {
     @Override
     @Retry(name = ACCOUNT_SERVICE)
     @CircuitBreaker(name = ACCOUNT_SERVICE)
+    @Bulkhead(name = ACCOUNT_SERVICE)
     public BalanceSnapshot getBalance(String accountId) {
         return metrics.timeAccountCall(() -> {
             try {
