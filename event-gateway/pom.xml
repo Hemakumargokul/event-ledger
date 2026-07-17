@@ -115,6 +115,17 @@
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
+    <!-- Consumer-driven contract test: generates pacts/event-gateway-account-service.json,
+         which the Account Service's verification test replays.
+         Side effect: brings Apache HttpClient onto the test classpath, which
+         TestRestTemplate would otherwise silently auto-detect and switch to —
+         see the spring.http.client.factory=jdk pin in GatewayResilienceTest. -->
+    <dependency>
+      <groupId>au.com.dius.pact.consumer</groupId>
+      <artifactId>junit5</artifactId>
+      <version>${pact.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

@@ -45,7 +45,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "resilience4j.circuitbreaker.instances.accountService.wait-duration-in-open-state=500ms",
         "resilience4j.retry.instances.accountService.wait-duration=50ms",
-        "account-service.read-timeout=500ms"
+        "account-service.read-timeout=500ms",
+        // Pact (contract tests) puts Apache HttpClient on the test classpath;
+        // without this pin TestRestTemplate silently switches to it, which
+        // re-sends requests and breaks the attempt-count/fail-fast assertions.
+        "spring.http.clients.imperative.factory=jdk"
 })
 @AutoConfigureTestRestTemplate
 class GatewayResilienceTest {

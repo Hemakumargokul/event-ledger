@@ -28,5 +28,6 @@
     <!-- Pinned explicitly: resilience4j-spring-boot4 was missing from early 2.4.0 BOMs -->
     <resilience4j.version>2.4.0</resilience4j.version>
     <wiremock.version>3.13.2</wiremock.version>
+    <pact.version>4.6.21</pact.version>
   </properties>
 </project>

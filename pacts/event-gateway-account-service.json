@@ -1,0 +1,134 @@
+{
+  "consumer": {
+    "name": "event-gateway"
+  },
+  "interactions": [
+    {
+      "description": "a balance query for an unknown account",
+      "providerStates": [
+        {
+          "name": "account acct-missing does not exist"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/accounts/acct-missing/balance"
+      },
+      "response": {
+        "status": 404
+      }
+    },
+    {
+      "description": "a balance query for an existing account",
+      "providerStates": [
+        {
+          "name": "account acct-pact exists with balance 150.00 USD"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/accounts/acct-pact/balance"
+      },
+      "response": {
+        "body": {
+          "accountId": "acct-pact",
+          "balance": 150.0,
+          "currency": "USD"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "matchingRules": {
+          "body": {
+            "$.accountId": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.balance": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "decimal"
+                }
+              ]
+            },
+            "$.currency": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      }
+    },
+    {
+      "description": "a new credit transaction",
+      "providerStates": [
+        {
+          "name": "transaction evt-pact-1 has not been applied"
+        }
+      ],
+      "request": {
+        "body": {
+          "amount": 150.00,
+          "currency": "USD",
+          "eventTimestamp": "2026-05-15T14:02:11Z",
+          "transactionId": "evt-pact-1",
+          "type": "CREDIT"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/accounts/acct-pact/transactions"
+      },
+      "response": {
+        "status": 201
+      }
+    },
+    {
+      "description": "the same transaction submitted again",
+      "providerStates": [
+        {
+          "name": "transaction evt-pact-1 was already applied to account acct-pact"
+        }
+      ],
+      "request": {
+        "body": {
+          "amount": 150.00,
+          "currency": "USD",
+          "eventTimestamp": "2026-05-15T14:02:11Z",
+          "transactionId": "evt-pact-1",
+          "type": "CREDIT"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/accounts/acct-pact/transactions"
+      },
+      "response": {
+        "status": 200
+      }
+    }
+  ],
+  "metadata": {
+    "pact-jvm": {
+      "version": "4.6.21"
+    },
+    "pactSpecification": {
+      "version": "3.0.0"
+    }
+  },
+  "provider": {
+    "name": "account-service"
+  }
+}

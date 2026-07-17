@@ -103,12 +103,13 @@ cd event-gateway  && mvn spring-boot:run      # terminal 2
 ## Tests
 
 ```bash
-mvn test        # from the repo root — runs both modules (67 tests)
+mvn test        # from the repo root — runs both modules (76 tests)
 ```
 
 The suite is a pyramid: fast unit/slice tests for domain logic and API contracts
 (`@WebMvcTest`, `@DataJpaTest`, Mockito), component tests with WireMock standing in for
-the Account Service (resiliency, wire contract, trace propagation), and a two-service
+the Account Service (resiliency, wire contract, trace propagation), Pact contract tests
+pinning the Gateway↔Account wire contract from both sides, and a two-service
 integration test that boots both real contexts on random ports.
 
 | Requirement | Where it's proven |
@@ -120,6 +121,7 @@ integration test that boots both real contexts on random ports.
 | Resiliency | `GatewayResilienceTest` (circuit opens on repeated 5xx and fails fast, half-open recovery, exactly-3-attempts retry, 4xx neither retried nor recorded, saturated bulkhead sheds without a downstream call) |
 | Trace propagation | `GatewayTracingTest` (downstream `traceparent` carries the caller's trace ID), `EndToEndIntegrationTest` (both services log one shared trace ID) |
 | Graceful degradation | `GatewayDegradationTest` (503 writes with nothing persisted, local reads fine, health UP) plus the smoke test against real containers |
+| Service contract (Pact) | `AccountServicePactTest` (consumer: the real client generates `pacts/event-gateway-account-service.json`), `GatewayContractVerificationTest` (provider: replays every interaction against the real service with seeded state) |
 
 ## Resiliency design
 
